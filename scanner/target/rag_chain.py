@@ -9,7 +9,7 @@ The scanner probes fire against this pipeline to find real vulnerabilities.
 import os
 from pathlib import Path
 from langchain_community.llms import Ollama
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document

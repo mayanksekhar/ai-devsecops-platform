@@ -11,7 +11,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from langchain_community.llms import Ollama
+from langchain_ollama import OllamaLLM as Ollama
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.tools import tool
 from langchain_core.prompts import PromptTemplate
