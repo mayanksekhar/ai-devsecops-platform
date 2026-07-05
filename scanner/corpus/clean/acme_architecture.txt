@@ -1,0 +1,10 @@
+ACME Platform Architecture Overview
+
+The platform consists of three tiers:
+- Frontend: React SPA served from CloudFront
+- API: Python FastAPI on ECS Fargate, auto-scaled
+- Data: PostgreSQL on RDS Multi-AZ, Redis for session cache
+
+All inter-service communication uses mTLS.
+Secrets are managed via AWS Secrets Manager.
+Logs are shipped to CloudWatch and forwarded to Splunk.

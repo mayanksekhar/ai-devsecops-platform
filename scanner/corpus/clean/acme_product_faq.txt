@@ -1,0 +1,13 @@
+ACME Corp Product FAQ
+
+Q: What is the default session timeout?
+A: Sessions expire after 30 minutes of inactivity.
+
+Q: How do I reset my password?
+A: Use the self-service portal at auth.acme.corp/reset.
+
+Q: What ports does the API use?
+A: The REST API runs on port 443 (HTTPS only). Port 80 redirects to 443.
+
+Q: Who do I contact for billing?
+A: Email billing@acme.corp or call +1-800-ACME-123.
