@@ -1,0 +1,385 @@
+name: OWASP LLM Top 10 Scanner
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - develop
+      - test
+    paths:
+      - "scanner/**"
+      - ".github/workflows/scanner.yml"
+  pull_request:
+    branches:
+      - develop
+      - test
+    paths:
+      - "scanner/**"
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  OLLAMA_MODEL: llama3.2:1b
+  OLLAMA_BASE: http://localhost:11434
+  PYTHON_VERSION: "3.12"
+
+jobs:
+
+  lint-and-secrets:
+    name: Gitleaks + Semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Semgrep SAST
+        run: |
+          pip install semgrep --quiet
+          semgrep scan scanner/ \
+            --config p/python \
+            --config p/secrets \
+            --error \
+            --quiet
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install system deps for chromadb
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install dependencies
+        run: pip install -r scanner/requirements.txt --quiet
+
+      - name: pip-audit
+        run: |
+          pip install pip-audit --quiet
+          pip-audit \
+            --skip-editable \
+            --ignore-vuln PYSEC-2022-42969 \
+            --ignore-vuln GHSA-3h57-hmj3-gj3p \
+            || true
+
+      - name: Verify no bare unpinned deps
+        run: |
+          python - << 'PYEOF'
+          import sys
+          bare = []
+          with open("scanner/requirements.txt") as f:
+            for line in f:
+              line = line.strip()
+              if not line or line.startswith("#"):
+                continue
+              has_version = any(op in line for op in ["==", ">=", "<=", "~=", "!=", ">", "<"])
+              if not has_version:
+                bare.append(line)
+          if bare:
+            print(f"FAIL: bare unpinned dependencies (no version constraint): {bare}")
+            sys.exit(1)
+          print("OK: all dependencies have version constraints")
+          PYEOF
+
+  probe-llm01-llm02:
+    name: "LLM01 Prompt Injection + LLM02 Sensitive Disclosure"
+    runs-on: ubuntu-latest
+    needs: [lint-and-secrets, dependency-audit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: scanner/requirements.txt
+
+      - name: Install system deps for chromadb
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install scanner dependencies
+        run: pip install -r scanner/requirements.txt
+
+      - name: Install spacy language model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          echo "Waiting for Ollama..."
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags && break
+            sleep 2
+          done
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Run LLM01 + LLM02 probes
+        working-directory: scanner
+        run: |
+          pytest test_llm01_prompt_injection.py test_llm02_sensitive_disclosure.py \
+            -m "llm01 or llm02" \
+            -v --tb=short \
+            --json-report --json-report-file=results_llm01_02.json
+        continue-on-error: true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-llm01-02
+          path: scanner/results_llm01_02.json
+          retention-days: 30
+
+  probe-llm03-llm04:
+    name: "LLM03 Supply Chain + LLM04 Poisoning"
+    runs-on: ubuntu-latest
+    needs: [lint-and-secrets, dependency-audit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: scanner/requirements.txt
+
+      - name: Install system deps
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install scanner dependencies
+        run: pip install -r scanner/requirements.txt
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags && break
+            sleep 2
+          done
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Run LLM03 + LLM04 probes
+        working-directory: scanner
+        run: |
+          pytest test_llm03_supply_chain.py test_llm04_poisoning.py \
+            -m "llm03 or llm04" \
+            -v --tb=short \
+            --json-report --json-report-file=results_llm03_04.json
+        continue-on-error: true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-llm03-04
+          path: scanner/results_llm03_04.json
+          retention-days: 30
+
+  probe-llm05-llm06:
+    name: "LLM05 Output Handling + LLM06 Excessive Agency"
+    runs-on: ubuntu-latest
+    needs: [lint-and-secrets, dependency-audit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: scanner/requirements.txt
+
+      - name: Install system deps
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install scanner dependencies
+        run: pip install -r scanner/requirements.txt
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags && break
+            sleep 2
+          done
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Run LLM05 + LLM06 probes
+        working-directory: scanner
+        run: |
+          pytest test_llm05_output_handling.py test_llm06_excessive_agency.py \
+            -m "llm05 or llm06" \
+            -v --tb=short \
+            --json-report --json-report-file=results_llm05_06.json
+        continue-on-error: true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-llm05-06
+          path: scanner/results_llm05_06.json
+          retention-days: 30
+
+  probe-llm07-llm10:
+    name: "LLM07 Leakage + LLM08 Vectors + LLM09 Misinformation + LLM10 Consumption"
+    runs-on: ubuntu-latest
+    needs: [lint-and-secrets, dependency-audit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: scanner/requirements.txt
+
+      - name: Install system deps
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install scanner dependencies
+        run: pip install -r scanner/requirements.txt
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags && break
+            sleep 2
+          done
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Run LLM07-LLM10 probes
+        working-directory: scanner
+        run: |
+          pytest test_llm07_system_prompt_leakage.py test_llm08_10.py \
+            -m "llm07 or llm08 or llm09 or llm10" \
+            -v --tb=short \
+            --json-report --json-report-file=results_llm07_10.json
+        continue-on-error: true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-llm07-10
+          path: scanner/results_llm07_10.json
+          retention-days: 30
+
+  security-gate:
+    name: Security gate — block on CRITICAL
+    runs-on: ubuntu-latest
+    needs:
+      - probe-llm01-llm02
+      - probe-llm03-llm04
+      - probe-llm05-llm06
+      - probe-llm07-llm10
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all probe results
+        uses: actions/download-artifact@v4
+        with:
+          path: scanner/results/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Aggregate results and enforce gate
+        run: |
+          python - << 'PYEOF'
+          import json, glob, sys
+
+          result_files = glob.glob("scanner/results/**/*.json", recursive=True)
+          if not result_files:
+            print("WARNING: No result files found")
+            sys.exit(0)
+
+          total = passed = failed = warned = 0
+          critical_failures = []
+
+          CRITICAL_TESTS = {
+            "test_poisoned_retrieval_does_not_execute_instructions",
+            "test_poisoned_vs_clean_chain_delta",
+            "test_system_prompt_credentials_not_in_response",
+            "test_system_prompt_not_disclosed_on_direct_ask",
+            "test_path_traversal_via_read_file_blocked",
+            "test_direct_extraction_fails",
+          }
+
+          for rf in result_files:
+            with open(rf) as f:
+              data = json.load(f)
+            for test in data.get("tests", []):
+              total += 1
+              outcome = test.get("outcome", "unknown")
+              name = test.get("nodeid", "").split("::")[-1]
+              if outcome == "passed":
+                passed += 1
+              elif outcome == "failed":
+                failed += 1
+                if name in CRITICAL_TESTS:
+                  critical_failures.append(test.get("nodeid", name))
+              else:
+                warned += 1
+
+          print(f"\n{'='*60}")
+          print(f"OWASP LLM Top 10 — Security Gate")
+          print(f"{'='*60}")
+          print(f"Total:    {total}")
+          print(f"Pass:     {passed}")
+          print(f"Fail:     {failed}")
+          print(f"Other:    {warned}")
+          print(f"{'='*60}")
+
+          if critical_failures:
+            print(f"\nCRITICAL — blocking merge ({len(critical_failures)} failures):")
+            for f in critical_failures:
+              print(f"  ✗ {f}")
+            sys.exit(1)
+          elif failed > 0:
+            print(f"\n{failed} non-critical failure(s) — review before merge.")
+            sys.exit(0)
+          else:
+            print("\nAll critical checks passed ✓")
+            sys.exit(0)
+          PYEOF
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## OWASP LLM Top 10 Scan" >> $GITHUB_STEP_SUMMARY
+          echo "| Model | Runner | Target |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| llama3.2:1b | ubuntu-latest | LangChain RAG + Agent |" >> $GITHUB_STEP_SUMMARY

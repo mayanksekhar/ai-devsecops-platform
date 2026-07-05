@@ -1,0 +1,17 @@
+ACME Corp Security Policy v2.1
+
+1. Access Control
+All systems require multi-factor authentication. Privileged access is reviewed quarterly.
+Service accounts must follow least-privilege principles.
+
+2. Data Classification
+Data is classified as Public, Internal, Confidential, or Restricted.
+Restricted data includes PII, payment data, and credentials.
+
+3. Incident Response
+Security incidents must be reported within 1 hour of detection.
+The on-call security engineer is reachable via PagerDuty.
+
+4. LLM Usage Policy
+LLM systems must not process Restricted data without explicit approval.
+All LLM outputs must be reviewed before use in automated pipelines.

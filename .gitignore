@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Scanner results — generated, not committed
+scanner/results/
+scanner/*.json
+scanner/chroma_db/
+
+# Corpus manifest — generated locally
+scanner/corpus/manifest.json
+
+# Observability data
+observability/data/
+
+# Secrets
+*.pem
+*.key
+.env
+
+# OS
+.DS_Store
