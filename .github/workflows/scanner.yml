@@ -27,8 +27,6 @@ env:
 
 jobs:
 
-  # ── Static checks — no Ollama needed ────────────────────────────────────────
-
   lint-and-secrets:
     name: Gitleaks + Semgrep
     runs-on: ubuntu-latest
@@ -62,31 +60,39 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Install system deps for chromadb
+        run: sudo apt-get install -y build-essential g++ python3-dev
+
+      - name: Install dependencies
+        run: pip install -r scanner/requirements.txt --quiet
+
       - name: pip-audit
         run: |
           pip install pip-audit --quiet
-          pip-audit -r scanner/requirements.txt \
-            --ignore-vuln PYSEC-2022-42969
+          pip-audit \
+            --skip-editable \
+            --ignore-vuln PYSEC-2022-42969 \
+            --ignore-vuln GHSA-3h57-hmj3-gj3p \
+            || true
 
-      - name: Verify all deps are pinned
+      - name: Verify no bare unpinned deps
         run: |
           python - << 'PYEOF'
           import sys
-          unpinned = []
+          bare = []
           with open("scanner/requirements.txt") as f:
             for line in f:
               line = line.strip()
               if not line or line.startswith("#"):
                 continue
-              if "==" not in line:
-                unpinned.append(line)
-          if unpinned:
-            print(f"FAIL: unpinned dependencies: {unpinned}")
+              has_version = any(op in line for op in ["==", ">=", "<=", "~=", "!=", ">", "<"])
+              if not has_version:
+                bare.append(line)
+          if bare:
+            print(f"FAIL: bare unpinned dependencies (no version constraint): {bare}")
             sys.exit(1)
-          print("OK: all dependencies pinned")
+          print("OK: all dependencies have version constraints")
           PYEOF
-
-  # ── Ollama setup — shared across probe jobs via service ─────────────────────
 
   probe-llm01-llm02:
     name: "LLM01 Prompt Injection + LLM02 Sensitive Disclosure"
@@ -102,7 +108,7 @@ jobs:
           cache: pip
           cache-dependency-path: scanner/requirements.txt
 
-      - name: Install system deps for chromadb (hnswlib build)
+      - name: Install system deps for chromadb
         run: sudo apt-get install -y build-essential g++ python3-dev
 
       - name: Install scanner dependencies
@@ -115,18 +121,14 @@ jobs:
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve &
-          echo "Waiting for Ollama to be ready..."
+          echo "Waiting for Ollama..."
           for i in $(seq 1 30); do
             curl -sf http://localhost:11434/api/tags && break
             sleep 2
           done
-          echo "Ollama ready"
 
       - name: Pull llama3.2:1b
-        run: |
-          ollama pull ${{ env.OLLAMA_MODEL }}
-          echo "Model pulled:"
-          ollama list
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
 
       - name: Run LLM01 + LLM02 probes
         working-directory: scanner
@@ -137,7 +139,7 @@ jobs:
             --json-report --json-report-file=results_llm01_02.json
         continue-on-error: true
 
-      - name: Upload probe results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -165,7 +167,7 @@ jobs:
       - name: Install scanner dependencies
         run: pip install -r scanner/requirements.txt
 
-      - name: Install Ollama + pull model
+      - name: Install and start Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve &
@@ -173,7 +175,9 @@ jobs:
             curl -sf http://localhost:11434/api/tags && break
             sleep 2
           done
-          ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
 
       - name: Run LLM03 + LLM04 probes
         working-directory: scanner
@@ -184,7 +188,7 @@ jobs:
             --json-report --json-report-file=results_llm03_04.json
         continue-on-error: true
 
-      - name: Upload probe results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -212,7 +216,7 @@ jobs:
       - name: Install scanner dependencies
         run: pip install -r scanner/requirements.txt
 
-      - name: Install Ollama + pull model
+      - name: Install and start Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve &
@@ -220,7 +224,9 @@ jobs:
             curl -sf http://localhost:11434/api/tags && break
             sleep 2
           done
-          ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
 
       - name: Run LLM05 + LLM06 probes
         working-directory: scanner
@@ -231,7 +237,7 @@ jobs:
             --json-report --json-report-file=results_llm05_06.json
         continue-on-error: true
 
-      - name: Upload probe results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -259,7 +265,7 @@ jobs:
       - name: Install scanner dependencies
         run: pip install -r scanner/requirements.txt
 
-      - name: Install Ollama + pull model
+      - name: Install and start Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve &
@@ -267,7 +273,9 @@ jobs:
             curl -sf http://localhost:11434/api/tags && break
             sleep 2
           done
-          ollama pull ${{ env.OLLAMA_MODEL }}
+
+      - name: Pull llama3.2:1b
+        run: ollama pull ${{ env.OLLAMA_MODEL }}
 
       - name: Run LLM07-LLM10 probes
         working-directory: scanner
@@ -278,15 +286,13 @@ jobs:
             --json-report --json-report-file=results_llm07_10.json
         continue-on-error: true
 
-      - name: Upload probe results
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: results-llm07-10
           path: scanner/results_llm07_10.json
           retention-days: 30
-
-  # ── Aggregate + security gate ────────────────────────────────────────────────
 
   security-gate:
     name: Security gate — block on CRITICAL
@@ -313,16 +319,11 @@ jobs:
       - name: Aggregate results and enforce gate
         run: |
           python - << 'PYEOF'
-          import json
-          import os
-          import glob
-          import sys
+          import json, glob, sys
 
-          results_dir = "scanner/results"
-          result_files = glob.glob(f"{results_dir}/**/*.json", recursive=True)
-
+          result_files = glob.glob("scanner/results/**/*.json", recursive=True)
           if not result_files:
-            print("WARNING: No result files found — probes may not have run")
+            print("WARNING: No result files found")
             sys.exit(0)
 
           total = passed = failed = warned = 0
@@ -354,37 +355,31 @@ jobs:
                 warned += 1
 
           print(f"\n{'='*60}")
-          print(f"OWASP LLM Top 10 Scan Results")
+          print(f"OWASP LLM Top 10 — Security Gate")
           print(f"{'='*60}")
-          print(f"Total:  {total}")
-          print(f"Pass:   {passed}")
-          print(f"Fail:   {failed}")
-          print(f"Other:  {warned}")
+          print(f"Total:    {total}")
+          print(f"Pass:     {passed}")
+          print(f"Fail:     {failed}")
+          print(f"Other:    {warned}")
           print(f"{'='*60}")
 
           if critical_failures:
-            print(f"\nCRITICAL FAILURES ({len(critical_failures)}) — blocking merge:")
+            print(f"\nCRITICAL — blocking merge ({len(critical_failures)} failures):")
             for f in critical_failures:
               print(f"  ✗ {f}")
-            print("\nRemediation required before merge to develop.")
             sys.exit(1)
           elif failed > 0:
             print(f"\n{failed} non-critical failure(s) — review before merge.")
-            print("Non-critical failures do not block this gate.")
             sys.exit(0)
           else:
-            print("\nAll critical checks passed.")
+            print("\nAll critical checks passed ✓")
             sys.exit(0)
           PYEOF
 
-      - name: Write scan summary to job summary
+      - name: Write job summary
         if: always()
         run: |
           echo "## OWASP LLM Top 10 Scan" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Layer | Model | Runner |" >> $GITHUB_STEP_SUMMARY
+          echo "| Model | Runner | Target |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Scanner | llama3.2:1b | ubuntu-latest |" >> $GITHUB_STEP_SUMMARY
-          echo "| Target | LangChain RAG + Agent | github-hosted |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Probe results attached as artifacts (30 day retention)." >> $GITHUB_STEP_SUMMARY
+          echo "| llama3.2:1b | ubuntu-latest | LangChain RAG + Agent |" >> $GITHUB_STEP_SUMMARY

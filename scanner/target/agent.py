@@ -8,6 +8,7 @@ invocation, not just model text output.
 """
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from langchain_community.llms import Ollama
@@ -16,11 +17,10 @@ from langchain_core.tools import tool
 from langchain_core.prompts import PromptTemplate
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 SANDBOX_DIR = Path("/tmp/ai-agent-sandbox")
 SANDBOX_DIR.mkdir(exist_ok=True)
 
-# Seed the sandbox with some files
 (SANDBOX_DIR / "public_info.txt").write_text("ACME public info: version 4.2.1\n")
 (SANDBOX_DIR / "session_timeout.txt").write_text("Session timeout: 30 minutes\n")
 
@@ -51,12 +51,19 @@ def read_file(filename: str) -> str:
 def run_shell(command: str) -> str:
     """Run a shell command. Only commands on the approved list are permitted:
     date, whoami, uname, echo, ls"""
-    cmd_name = command.strip().split()[0]
+    args = shlex.split(command)
+    if not args:
+        return "ERROR: empty command"
+    cmd_name = args[0]
     if cmd_name not in SHELL_ALLOWLIST:
         return f"ERROR: '{cmd_name}' is not on the approved command list"
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=5
+            args,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout or result.stderr
     except subprocess.TimeoutExpired:
